@@ -1,0 +1,77 @@
+#!/usr/bin/Rscript
+
+##----This script analyzes the environmental swab 16S data from hospital surface samples collected June 7, 2019 from ward 13K at OHSU hospital. Sampling locations included the window surface, the window frame in direct contact with sunlight, the window frame that is not in direct contac with snlight, the curtain that is in contact with direct sunlight, the curtain that is not in contact with direct sunlight, and the air return grille vent----## 
+
+##----This script was processed using the University of Oregon super computer, TALAPAS----####
+
+##Load Packages## 
+library(dada2); packageVersion('dada2')
+
+## in case we need to generate a random number, set the starting number
+set.seed(777)
+
+## Set working directory
+setwd("/projects/biobe/pfh/view") #Talapas 
+
+### ----------------------- ###
+## Set the path 
+path = "/projects/biobe/pfh/view"
+
+
+fnFs <- sort(list.files(path1, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path1, pattern="_R2_001.fastq", full.names = TRUE))
+
+## Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "-"), `[`, 1)
+
+## Place filtered files in filtered/ subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+
+plotQualityProfile(fnFs[1:4])
+plotQualityProfile(fnRs[1:4])
+
+## Filter and trim 
+out <- filterAndTrim(fnFs, filtFs, truncLen=c(105),
+                     maxN=0, maxEE=c(12), truncQ=6, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+saveRDS(out, file = "Viewglass_FiltTrim.rds")
+
+#Learn error rates
+errF <- learnErrors(filtFs, multithread=TRUE, verbose = TRUE)
+saveRDS(errF, file="Viewglass_errorsF.rds")
+
+## Dereplication 
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+# Name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+
+## Sample Inference - DADA2 Algorithms
+dadaFs2 <- dada(derepFs, err=errF, multithread=TRUE, verbose = TRUE, pool = TRUE)
+saveRDS(dadaFs2, file="Viewglass_dadaF_pooled.rds")
+
+## Construct sequence table 
+seqtab2 <- makeSequenceTable(dadaFs2)
+saveRDS(seqtab2, file="Viewglass_seqtab_pooled.rds")
+
+## Remove chimeras
+seqtab.nochim2 <- removeBimeraDenovo(seqtab2, method="consensus", multithread=TRUE, verbose=TRUE)
+saveRDS(seqtab.nochim2, file="Viewglass_seqtab.nochim_pooled.rds")
+
+## Track reads through the pipeline
+getN <- function(x) sum(getUniques(x))
+track2 <- cbind(out, sapply(dadaFs2, getN), rowSums(seqtab.nochim2))
+colnames(track2) <- c("input", "filtered", "denoisedF", "nonchim")
+rownames(track2) <- sample.names
+track2 = transform(track2, percent.out = nonchim / input)
+track2$percent.out <- ((track2$percent.out)*100)
+write.csv(track2, "trackedreads_pooled.csv")
+
+# Assign taxonomy
+taxa2 <- assignTaxonomy(seqtab.nochim2, "/projects/biobe/pfh/Cdiff/silva_nr_v132_train_set.fa", multithread=TRUE)
+taxa2 <- addSpecies(taxa2, "/projects/biobe/pfh/Cdiff/silva_species_assignment_v132.fa")
+saveRDS(taxa2, file="Viewglass_taxa.rds")
+
+write.csv(taxa2, "taxa.csv")
+
+quit(save="no")
