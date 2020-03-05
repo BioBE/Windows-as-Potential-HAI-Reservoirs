@@ -32,13 +32,13 @@ library(ggthemes)
 ##----------------------------------------------##
 ## load data
 ##----------------------------------------------##
-setwd("~./directory)
+setwd("~/raw16s)
 
 ## Load raw data
-qp1 <- read.csv('~./16s_Plate_1_Results.csv', header = T,skip = 20, stringsAsFactors = F)
-qp2 <- read.csv('~./16s_Plate_2_Results.csv', header = T,skip = 20, stringsAsFactors = F)
-qp3 <- read.csv('~./16s_Plate_3_Results.csv', header = T,skip = 20, stringsAsFactors = F)
-qp4 <- read.csv('~./16s_Plate_4_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp1 <- read.csv('./16s_Plate_1_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp2 <- read.csv('./16s_Plate_2_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp3 <- read.csv('./16s_Plate_3_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp4 <- read.csv('./16s_Plate_4_Results.csv', header = T,skip = 20, stringsAsFactors = F)
 
 #Fix Undetermined Data
 qp1[qp1 == "Undetermined"] <- NA
