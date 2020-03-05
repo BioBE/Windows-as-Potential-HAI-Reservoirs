@@ -1,0 +1,439 @@
+###---------------------------------------------###
+###---------------------------------------------###
+###---16S bacterial abundance analysis script---###
+###---------------------------------------------###
+###---------------------------------------------###
+
+# This is the script used to analyze the abundnce of viable bacteria from hospital swabs collected from the 13th floor of Kohler Pavillion at Oregon Health and Science University in June 2019. Swab locations including the window glass, window frame, curtains, and the air return grille. Extracted genomic DNA was treated with propidium monoazide (PMA) to exclude non-viable bacteria. Total bacterial abundance was quantified using DNA standards from Integrated DNA Technologies comprising a 167 bp segment of the E.coli 16S rRNA region using Total Bacteria F SYBR Primer (5’ - GTGSTGCAYGGYTGTCGTCA - 3’) and Total Bacteria R SYBR Primer (5’ - ACGTCRTCCMCACCTTCCTC - 3’). All qPCR plates were prepared using an Eppendorf epMotion 5075 robot. PowerUp SYBR Green Mastermix (Thermo-Fisher Scientific, Catalog #A25741) and an ABI QuantStudio3 (Applied Biosystems, Catalog #A28137) were used to detect amplification of targeted gene regions. This script is used to generate standard curves from serial-dilutions of the synthetic DNA standards with known gene sequence copy numbers and perform subsequent analysis.
+
+#Load Libraries 
+library(dplyr);packageVersion("dplyr")
+library(ggplot2); packageVersion("ggplot2")
+library(wesanderson); packageVersion("wesanderson")
+library(ggsignif)
+library(lme4)
+library(naniar)
+library(stringr)
+library(FedData)
+library(fedregs)
+library(ggsignif)
+library(plotly)
+library(ggforce)
+library(psych)
+library(FSA)
+library(car)
+library(rcompanion)
+library(multcompView)
+library(lsmeans)
+library(multcomp)
+library(gridExtra)
+library(ggthemes)
+
+##----------------------------------------------##
+## load data
+##----------------------------------------------##
+setwd("~./directory)
+
+## Load raw data
+qp1 <- read.csv('~./16s_Plate_1_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp2 <- read.csv('~./16s_Plate_2_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp3 <- read.csv('~./16s_Plate_3_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+qp4 <- read.csv('~./16s_Plate_4_Results.csv', header = T,skip = 20, stringsAsFactors = F)
+
+#Fix Undetermined Data
+qp1[qp1 == "Undetermined"] <- NA
+qp2[qp2 == "Undetermined"] <- NA
+qp3[qp3 == "Undetermined"] <- NA
+qp4[qp4 == "Undetermined"] <- NA
+
+##----------------------------------------------##
+## aggregate triplicates
+##----------------------------------------------##
+qp1.1 <- qp1 %>%
+  dplyr::group_by(Sample) %>% #, run) %>%
+  dplyr::summarise(Cq = mean(as.numeric(as.character(Cq)))) %>%
+  as.data.frame()
+
+qp2.1 <- qp2 %>%
+  dplyr::group_by(Sample) %>% #, run) %>%
+  dplyr::summarise(Cq = mean(as.numeric(as.character(Cq)))) %>%
+  as.data.frame()
+
+qp3.1 <- qp3 %>%
+  dplyr::group_by(Sample) %>% #, run) %>%
+  dplyr::summarise(Cq = mean(as.numeric(as.character(Cq)))) %>%
+  as.data.frame()
+
+qp4.1 <- qp4 %>%
+  dplyr::group_by(Sample) %>% #, run) %>%
+  dplyr::summarise(Cq = mean(as.numeric(as.character(Cq)))) %>%
+  as.data.frame()
+
+##----------------------------------------------##
+## standards analysis, standard curve creation, and conversion
+##----------------------------------------------##
+
+## extract standards
+standards1 <- qp1.1[grepl('Standard', qp1.1$Sample), ]
+standards2 <- qp2.1[grepl('Standard', qp2.1$Sample), ]
+standards3 <- qp3.1[grepl('Standard', qp3.1$Sample), ]
+standards4 <- qp4.1[grepl('Standard', qp4.1$Sample), ]
+
+## remove standards from array
+qp1.1 <- qp1.1[!grepl('Standard', qp1.1$Sample), ]
+qp2.1 <- qp2.1[!grepl('Standard', qp2.1$Sample), ]
+qp3.1 <- qp3.1[!grepl('Standard', qp3.1$Sample), ]
+qp4.1 <- qp4.1[!grepl('Standard', qp4.1$Sample), ]
+
+## dilution factor
+#The stock solution was 10 ng/uL, with a 1:10X serial dilution 
+dil <- c(	.1,
+          .01,
+          .001,
+          .0001,
+          .00001,
+          .000001,
+          .0000001)
+
+standards1 <- cbind(standards1, dil)
+standards2 <- cbind(standards2, dil)
+standards3 <- cbind(standards3, dil)
+standards4 <- cbind(standards4, dil)
+
+## calculate copy number
+This was a 20uL rxn instead of a 50, so I only used 2uL of DNA, and the DNA of the samples was not diluted
+
+# data on our standards:
+# length: 167 bp
+# amount: 250 ng
+# mol weight: 103073.5	== mass in grams of 1 mole of stuff
+# fmoles / ng: 9.7		== 1e-15 moles / 1e-9 grams
+# ug / OD260: 50
+
+# 1 Mole = 6.022e23
+
+# so:
+(1/103073.5) / 1e-6  	# moles per microgram == fmoles / ng
+# [1] 9.701815 			# it matches! 
+1 / (9.7e-15 / 1e-9) 	# working backwards, this should give us g/mol (mol weight)
+# [1] 103092.8 			# close enough! 
+
+
+(9.701815 * 1e-15) * 6.022140857e23		# molecules per ng
+# [1] 5842569650
+# This should be the same as copies per ng DNA
+
+## std. curve data
+copy.1 <- c(5842569650,   
+            584256965.0, 
+            58425696.50, 
+            5842569.650, 
+            584256.9650, 
+            58425.69650,  
+            5842.569650)
+
+## into data frame
+dat1 <- data.frame('Sample'= standards1$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards1$Cq)
+dat2 <- data.frame('Sample'= standards2$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards2$Cq)
+dat3 <- data.frame('Sample'= standards3$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards3$Cq)
+dat4 <- data.frame('Sample'= standards4$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards4$Cq)
+
+## std. curve data
+copy.1 <- c(5842569650,   
+            584256965.0, 
+            58425696.50, 
+            5842569.650, 
+            584256.9650, 
+            58425.69650,  
+            5842.569650)
+
+## into data frame
+dat1 <- data.frame('Sample'= standards1$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards1$Cq)
+dat2 <- data.frame('Sample'= standards2$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards2$Cq)
+dat3 <- data.frame('Sample'= standards3$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards3$Cq)
+dat4 <- data.frame('Sample'= standards4$Sample, 'copy' = copy.1, 'log.copy' = log10(copy.1), 'Cq' = standards4$Cq)
+
+## model fits for each run
+line1 <- lm(Cq ~ log.copy, data = dat1)
+line2 <- lm(Cq ~ log.copy, data = dat2)
+line3 <- lm(Cq ~ log.copy, data = dat3)
+line4 <- lm(Cq ~ log.copy, data = dat4)
+
+## extract a and b
+ab1 <- coef(line1)
+ab2 <- coef(line2)
+ab3 <- coef(line3)
+ab4 <- coef(line4)
+
+##------
+## do conversion
+##------
+
+## Conversion
+convert <- function(y, b, a){
+  x <- 10^((y - b) / a)
+  x
+}
+
+## count estimates per reaction
+qp1.1$counts <- convert(y = as.numeric(qp1.1$Cq), b = ab1[1], a = ab1[2])
+qp2.1$counts <- convert(y = as.numeric(qp2.1$Cq), b = ab2[1], a = ab2[2])
+qp3.1$counts <- convert(y = as.numeric(qp3.1$Cq), b = ab3[1], a = ab3[2])
+qp4.1$counts <- convert(y = as.numeric(qp4.1$Cq), b = ab4[1], a = ab4[2])
+
+## add plate/batch numbers 
+qp1.1$platenumber <- "1"
+qp2.1$platenumber <- "2"
+qp3.1$platenumber <- "3"
+qp4.1$platenumber <- "4"
+
+## Find NTC
+NTC.1 <- qp1.1[grepl('NTC', qp1.1$Sample), ]
+NTC.2 <- qp2.1[grepl('NTC', qp2.1$Sample), ]
+NTC.3 <- qp3.1[grepl('NTC', qp3.1$Sample), ]
+NTC.4 <- qp4.1[grepl('NTC', qp4.1$Sample), ]
+
+## Create a value you can subtract
+NTC.1 <- as.numeric(NTC.1$counts)
+NTC.2 <- as.numeric(NTC.2$counts)
+NTC.3 <- as.numeric(NTC.3$counts)
+NTC.4 <- as.numeric(NTC.4$counts)
+
+## Subtract out NTC
+qp1.1$counts <- qp1.1$counts - NTC.1
+qp2.1$counts <- qp2.1$counts - NTC.2
+qp3.1$counts <- qp3.1$counts - NTC.3
+qp4.1$counts <- qp4.1$counts - NTC.4
+
+## Change Counts of NA to 0
+qp1.1[is.na(qp1.1)] <- 0
+qp2.1[is.na(qp2.1)] <- 0
+qp3.1[is.na(qp3.1)] <- 0
+qp4.1[is.na(qp4.1)] <- 0
+
+## put them all back together, save
+sixteen_es.Final <- rbind(qp1.1, qp2.1, qp3.1, qp4.1)
+write.csv(sixteen_es.Final, file="./16s_qPCR-converted-counts.csv")
+
+## Load in Metadata if you starting fromv here 
+Metadata <- read.csv('/Users/patrick/Dropbox (BioBE)/BioBE Team Folder/Projects/Viewglass/qPCR/qPCR_Subset_Metadata.csv')
+
+##----------------------------------------------##
+## Metadata preparation for analysis
+##----------------------------------------------##
+## Time to add all of the needed labels!
+sixteen_es.Final$Locationraw <- "Curtain" #New Column for curtain samples
+sixteen_es.Final[grep("EC", sixteen_es.Final$Sample), "Locationraw"] <- "Extraction Control"
+sixteen_es.Final[grep("V", sixteen_es.Final$Sample), "Locationraw"] <- "Air Vent"
+sixteen_es.Final[grep("S", sixteen_es.Final$Sample), "Locationraw"] <- "Window Sill"
+sixteen_es.Final[grep("W", sixteen_es.Final$Sample), "Locationraw"] <- "Window"
+sixteen_es.Final[grep("NTC", sixteen_es.Final$Sample), "Locationraw"] <- "No Template Control"
+sixteen_es.Final[grep("NC", sixteen_es.Final$Sample), "Locationraw"] <- "Negative Control"
+
+## Add dark or light condition
+sixteen_es.Final$Light.Condition <- "Light" #New Column for sampling area that were exposed to light 
+sixteen_es.Final[grep("D", sixteen_es.Final$Sample), "Light.Condition"] <- "Dark"
+
+## Make Final groupings
+sixteen_es.Final$Location <- paste(sixteen_es.Final$Locationraw, sixteen_es.Final$Light.Condition)
+
+## remove No Template samples
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Locationraw =="No Template Control", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Sample =="Empty", ]
+
+## Subset Extraction Controls 
+EC.1 <- sixteen_es.Final[grepl('EC-1', sixteen_es.Final$Sample), ]
+EC.2 <- sixteen_es.Final[grepl('EC-2', sixteen_es.Final$Sample), ]
+EC.3 <- sixteen_es.Final[grepl('EC-3', sixteen_es.Final$Sample), ]
+EC.4 <- sixteen_es.Final[grepl('EC-4', sixteen_es.Final$Sample), ]
+EC.5 <- sixteen_es.Final[grepl('EC-5', sixteen_es.Final$Sample), ]
+EC.6 <- sixteen_es.Final[grepl('EC-6', sixteen_es.Final$Sample), ]
+EC.7 <- sixteen_es.Final[grepl('EC-7', sixteen_es.Final$Sample), ]
+EC.8 <- sixteen_es.Final[grepl('EC-8', sixteen_es.Final$Sample), ]
+EC.9 <- sixteen_es.Final[grepl('EC-9', sixteen_es.Final$Sample), ]
+Air <- sixteen_es.Final[grepl('Air', sixteen_es.Final$Sample), ]
+
+## Create a value you can subtract (Extraction controls)
+EC.1 <- as.numeric(EC.1$counts)
+EC.2 <- as.numeric(EC.2$counts)
+EC.3 <- as.numeric(EC.3$counts)
+EC.4 <- as.numeric(EC.4$counts)
+EC.5 <- as.numeric(EC.5$counts)
+EC.6 <- as.numeric(EC.6$counts)
+EC.7 <- as.numeric(EC.7$counts)
+EC.8 <- as.numeric(EC.8$counts)
+EC.9 <- as.numeric(EC.9$counts)
+Air <- as.numeric(Air$counts)
+
+
+## Make sure actual data and metadata are in the same order
+Metadata <- Metadata[order(Metadata$Sample_name),]
+sixteen_es.Final <- sixteen_es.Final[order(sixteen_es.Final$Sample),]
+
+## Add Extraction Batch 
+sixteen_es.Final$Extraction.Batch <- Metadata$DNA_extraction_batch
+
+## Remove Controls 
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Sample =="EC", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Sample =="NC", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Locationraw =="Extraction Control", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Locationraw =="Negative Control", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Sample =="E. Coli STD", ]
+sixteen_es.Final <- sixteen_es.Final[!sixteen_es.Final$Sample =="Air", ]
+
+## Add room numbers 
+sixteen_es.Final$Room <- as.character(unlist(str_extract_all(sixteen_es.Final$Sample, '\\d+')))
+sixteen_es.Final[grep("0", sixteen_es.Final$Room), "Room"] <- "Conference Room"
+
+## Add Location Data
+sixteen_es.Final$Cardinal.Direction <- "E"
+sixteen_es.Final[grep("6", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("7", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("8", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("9", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("10", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep('11', sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("12", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("13", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("14", sixteen_es.Final$Room), "Cardinal.Direction"] <- "SE"
+sixteen_es.Final[grep("15", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("16", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("17", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("18", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("19", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("20", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("21", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("22", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("23", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("24", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("25", sixteen_es.Final$Room), "Cardinal.Direction"] <- "NW"
+sixteen_es.Final[grep("26", sixteen_es.Final$Room), "Cardinal.Direction"] <- "W"
+sixteen_es.Final[grep("27", sixteen_es.Final$Room), "Cardinal.Direction"] <- "W"
+sixteen_es.Final[grep("28", sixteen_es.Final$Room), "Cardinal.Direction"] <- "W"
+sixteen_es.Final[grep("29", sixteen_es.Final$Room), "Cardinal.Direction"] <- "W"
+sixteen_es.Final[grep("30", sixteen_es.Final$Room), "Cardinal.Direction"] <- "W"
+
+## Subset by extraction batch to remove counts introduced during extraction 
+Extraction_Batch_1 <- sixteen_es.Final[grepl('1', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_2 <- sixteen_es.Final[grepl('2', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_3 <- sixteen_es.Final[grepl('3', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_4 <- sixteen_es.Final[grepl('4', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_5 <- sixteen_es.Final[grepl('5', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_6 <- sixteen_es.Final[grepl('6', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_7 <- sixteen_es.Final[grepl('7', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_8 <- sixteen_es.Final[grepl('8', sixteen_es.Final$Extraction.Batch), ]
+Extraction_Batch_9 <- sixteen_es.Final[grepl('9', sixteen_es.Final$Extraction.Batch), ]
+
+## Subtract out contaminants introduced during extraction
+Extraction_Batch_1$counts <- Extraction_Batch_1$counts - EC.1
+Extraction_Batch_2$counts <- Extraction_Batch_2$counts - EC.2
+Extraction_Batch_3$counts <- Extraction_Batch_3$counts - EC.3
+Extraction_Batch_4$counts <- Extraction_Batch_4$counts - EC.4
+Extraction_Batch_5$counts <- Extraction_Batch_5$counts - EC.5
+Extraction_Batch_6$counts <- Extraction_Batch_6$counts - EC.6
+Extraction_Batch_7$counts <- Extraction_Batch_7$counts - EC.7
+Extraction_Batch_8$counts <- Extraction_Batch_8$counts - EC.8
+Extraction_Batch_9$counts <- Extraction_Batch_9$counts - EC.9
+
+## Put all of the Extraction batches back together 
+sixteen_es.Final.Clean <- rbind(Extraction_Batch_1, Extraction_Batch_2, Extraction_Batch_3, Extraction_Batch_4, Extraction_Batch_5, Extraction_Batch_6, Extraction_Batch_7, Extraction_Batch_8, Extraction_Batch_9)
+
+## Make all negative values = 0
+sixteen_es.Final.Clean[sixteen_es.Final.Clean<0] = 0
+
+## Final Counts
+sixteen_es.Final.Clean$Log.counts = log10(sixteen_es.Final.Clean$counts)
+write.csv(sixteen_es.Final.Clean, file="./16s_qPCR-final-counts.csv")
+
+##----------------------------------------------##
+## Final Figure Creation
+##----------------------------------------------##
+## Standards Analysis Figure 
+ggscatter(dat1, x = 'log.copy', y = "Cq", 
+          shape = 21, size = 3, # Points color, shape and size
+          fill = 'Sample',
+          add = c("reg.line"),  # Add regressin line
+          font.legend = c(4, "plain"),
+          legend = "bottom",
+          add.params = list(color = "black", fill = "lightgrey", size = .4), # Customize reg. line
+          conf.int = TRUE, # Add confidence interval
+          cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+          cor.coeff.args = list(method = "pearson", label.x = 7.5, label.sep = "\n"),
+          cor.coef.size = 2.5) +
+          font("xy.text", size = 4) +
+          font("xlab", size = 4) +
+          font("ylab", size = 4) +
+          ggsave("16s.standards.pdf", width = 3, height = 3, units = c("in"))
+          
+## Location Comparison
+ggviolin(sixteen_es.Final.Clean, y = "Log.counts", x = "Locationraw",
+          add = "jitter", 
+          add.params = list(fill = "Locationraw"),
+          shape = 21, size = 1, # Points color, shape and size
+          width = 1,
+          legend = "none",
+          #font.legend = c(4, "plain"),
+          #legend.title = "Location",
+          ylab="# viable gene copies (log10)",
+          xlab="Location") +
+          font("xy.text", size = 4) +
+          font("xlab", size = 4) +
+          font("ylab", size = 4) +
+          ggsave("16s.locations.violin.pdf", width = 3, height = 3, units = c("in"))
+
+## Lighting comprison
+light_comparisons = list( c("Dark", "Light"))
+
+ggviolin(sixteen_es.Final.Clean, y = "Log.counts", x = "Light.Condition",
+         add = "jitter", 
+         add.params = list(fill = "Light.Condition"),
+         palette = c("#191970", "#ede905"),
+         shape = 21, size = 0.3, # Points color, shape and size
+         width = 1,
+         legend = "none",
+         #font.legend = c(4, "plain"),
+         #legend.title = "Location",
+         ylab="# viable gene copies (log10)",
+         xlab="Lighting Condition") +
+  font("xy.text", size = 4) +
+  font("xlab", size = 4) +
+  font("ylab", size = 4) +
+  stat_compare_means(comparisons = light_comparisons, label = "p.signif", label.y = 5.2) +
+  ggsave("16s.lighting.violin.pdf", width = 3, height = 3, units = c("in"))
+  
+## Cardinal direction
+cardinal_comparisons = list( c("W", "SE"), c("W", "NW"), c("E", "W"))
+
+ggviolin(sixteen_es.Final.Clean, y = "Log.counts", x = "Cardinal.Direction",
+         add = "jitter", 
+         add.params = list(fill = "Locationraw"),
+         #palette = c("#191970", "#ede905"),
+         shape = 21, size = 0.3, # Points color, shape and size
+         width = 1,
+         legend = "none",
+         ylim = (0:7),
+         #font.legend = c(4, "plain"),
+         #legend.title = "Location",
+         ylab="# viable gene copies (log10)",
+         xlab="Lighting Condition") +
+  font("xy.text", size = 4) +
+  font("xlab", size = 4) +
+  font("ylab", size = 4) +
+  stat_compare_means(comparisons = cardinal_comparisons, label = "p.signif", label.y = c(5.6, 6.1, 6.7)) +
+  ggsave("16s.cardinal.violin.pdf", width = 3, height = 3, units = c("in"))
+  
+## Figure Scatterplot
+ggscatter(sixteen_es.Final.Clean, x = 'meters', y = 'counts',
+          shape = 21, size = 3, # Points color, shape and size
+          add = c("reg.line"),  # Add regressin line
+          add.params = list(color = "black", fill = NA, size = .4), # Customize reg. line
+          conf.int = TRUE, # Add confidence interval
+          cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+          cor.coeff.args = list(method = "pearson", label.x = 7.5, label.sep = "\n"),
+          cor.coef.size = 2.5,
+          ylab="# viable gene copies",
+          xlab="Distance from the Nurses Station (meters)") +
+          font("xy.text", size = 4) +
+          font("xlab", size = 4) +
+          font("ylab", size = 4) +
+          ggsave("meters.scatterplot.pdf", width = 3, height = 3, units = c("in"))
